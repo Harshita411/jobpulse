@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createApp } from '../src/app.js';
+import { testApp as createApp, authFetch as fetch, TEST_OWNER } from './helpers/auth.js';
 
 async function withApi(queue, run) {
   const server = createApp(queue).listen(0, '127.0.0.1');
@@ -21,7 +21,7 @@ test('POST acknowledges only after enqueue and supplies Location', async () => {
     const body = await response.json();
     assert.equal(body.statusUrl, response.headers.get('location'));
     assert.equal(submission[0], 'simulation');
-    assert.deepEqual(submission[1], { mode: 'fail' });
+    assert.deepEqual(submission[1], { mode: 'fail', ownerId: TEST_OWNER });
     assert.equal(submission[2].jobId, body.jobId);
   });
 });
@@ -60,7 +60,7 @@ test('GET exposes completed result, failed error, active progress, missing and i
   let state = 'completed';
   await withApi({ async getJob() {
     return state === 'missing' ? undefined : {
-      id, progress: 60, returnvalue: { ok: true }, failedReason: 'Simulated task failed', getState: async () => state,
+      id, data: { ownerId: TEST_OWNER }, progress: 60, returnvalue: { ok: true }, failedReason: 'Simulated task failed', getState: async () => state,
     };
   } }, async base => {
     for (const nextState of ['completed', 'active', 'failed']) {

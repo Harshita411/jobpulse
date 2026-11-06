@@ -13,5 +13,11 @@ export function loadConfig(env = process.env) {
   }
   const mongodbUrl = env.MONGODB_URL ?? 'mongodb://127.0.0.1:27018/jobpulse';
   if (!/^mongodb(?:\+srv)?:\/\//.test(mongodbUrl)) throw new Error('MONGODB_URL must be a MongoDB URL');
-  return { port, redisUrl, mongodbUrl };
+  const sessionMinutes = Number(env.SESSION_TTL_MINUTES ?? 30);
+  if (!Number.isInteger(sessionMinutes) || sessionMinutes < 5 || sessionMinutes > 60) throw new Error('SESSION_TTL_MINUTES must be between 5 and 60');
+  if (env.SESSION_COOKIE_SECURE && !['true', 'false'].includes(env.SESSION_COOKIE_SECURE)) throw new Error('SESSION_COOKIE_SECURE must be true or false');
+  const appOrigin = env.APP_ORIGIN || 'http://localhost:5173';
+  const parsedOrigin = new URL(appOrigin);
+  if (!['http:', 'https:'].includes(parsedOrigin.protocol) || parsedOrigin.origin !== appOrigin) throw new Error('APP_ORIGIN must be an exact HTTP(S) origin');
+  return { port, redisUrl, mongodbUrl, auth: { port, appOrigin, sessionMinutes, secureCookie: env.SESSION_COOKIE_SECURE === 'true' } };
 }

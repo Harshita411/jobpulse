@@ -1,10 +1,10 @@
 # JobPulse
 
-A locally runnable background-job processing portfolio project using Node.js, Express, BullMQ, Redis, MongoDB Community Edition and a React operations dashboard. Supports real CSV imports and the original ten-second simulation jobs. No hosting, cloud accounts, paid APIs or public deployment are needed.
+A free, locally runnable background-job processing project: Express, BullMQ/Redis, independent Node workers, MongoDB Community, and a React dashboard. Accounts use bcrypt password hashes and MongoDB-backed sessions. Jobs, CSV imports, results, history and statistics are isolated per user. No paid hosting, cloud account or paid API is required.
 
-## Setup
+## Start locally
 
-Use Node.js 24 (or 22.12+ for Vite), npm and a running Docker Compose engine. These examples use PowerShell; use `npm` and `cp` on macOS/Linux.
+Use Node.js 24 (or 22.12+), npm, and an already running Docker Compose engine.
 
 ```powershell
 npm.cmd ci
@@ -13,120 +13,129 @@ npm.cmd --prefix web ci
 Copy-Item .env.example .env
 ```
 
-Configuration (existing process environment variables take precedence over root `.env`):
+Root configuration:
 
 ```dotenv
 PORT=3000
 REDIS_URL=redis://127.0.0.1:6380
 MONGODB_URL=mongodb://127.0.0.1:27018/jobpulse
+APP_ORIGIN=http://localhost:5173
+SESSION_TTL_MINUTES=30
+SESSION_COOKIE_SECURE=false
 ```
 
-All API, worker and integration-test npm scripts load the root `.env`. `REDIS_URL` is required. `MONGODB_URL` defaults to the local URL above; MongoDB connections are lazy so existing simulations still work without it. API port defaults to 3000.
+Existing environment variables take precedence over root `.env`. Redis uses host port **6380**, MongoDB **27018**. `APP_ORIGIN` is the exact browser origin, without a trailing slash. The session lifetime must be 5–60 minutes. `SESSION_COOKIE_SECURE=false` is only for this loopback HTTP setup; HTTPS deployment would require secure cookies and a separate deployment review. No JWT/signing secret is needed for opaque server-side sessions.
 
-For a fresh setup:
+The existing Compose services/ports/volumes are unchanged. If services are already running, leave them running. For a fresh setup only:
 
 ```powershell
 docker compose up -d redis mongodb
-docker compose ps
 ```
 
-If JobPulse Redis is already running, add only MongoDB:
+Run in separate terminals:
 
 ```powershell
-docker compose up -d --no-deps mongodb
-```
-
-Redis publishes on **127.0.0.1:6380**, MongoDB on **127.0.0.1:27018**. Internal ports remain 6379/27017. If 27018 is occupied, change the MongoDB host mapping and `MONGODB_URL` rather than stopping another container. Named volumes preserve data across normal container replacement. No reset/volume deletion is needed.
-
-Run these in separate terminals:
-
-```powershell
-# Terminal 1
+# API: localhost:3000
 npm.cmd start
-# Terminal 2
+# Worker: concurrency 1
 npm.cmd run worker
-# Terminal 3: React dashboard at http://localhost:5173
+# React: localhost:5173
 npm.cmd run web
-# Terminal 4 (optional second independent worker)
+# Optional additional independent worker
 npm.cmd run worker
 ```
 
-Each worker has concurrency 1 and logs its process ID when claiming work. The API never starts a worker. Ctrl+C drains active work before shutdown. `npm.cmd run dev` watches only the API.
+**Restart all API and worker processes started before this authentication change.** Old API processes still run their old unauthenticated code; old workers cannot interpret new owner-scoped CSV identities. Stop only your owned terminals with Ctrl+C, then use the commands above. No Docker restart or volume reset is needed. MongoDB is now required for API authentication, including simulation submission; the simulation handler itself remains independent of MongoDB.
 
-Open **http://localhost:5173**. React/Vite proxies relative `/api` requests to Express on **localhost:3000** using the existing root `PORT` setting. Redis stays on **6380** and MongoDB on **27018**. Restart any API/worker processes started before the current code was added: older APIs lack the read routes, and simulation-only workers can claim and reject CSV jobs. Stop only your owned API/worker terminals with Ctrl+C, then start them with the commands above. No container restart is necessary. Vite fails if port 5173 is busy instead of silently selecting another port.
+Open **http://localhost:5173/register**, create an account, and use the dashboard. Registration signs you in. Refreshing restores your session. Sign out revokes the session server-side and clears private views in other tabs. An expired session redirects to login. Vite proxies relative `/api` requests to the root `PORT`; Redis/MongoDB URLs never enter the browser bundle. Development and build-preview servers remain loopback-only.
 
-The dashboard shows actual retained queue counts and recent jobs. Submit CSV/simulation work, inspect history using server filters/search/pagination, follow live details, and browse completed summaries under Results. There are no fabricated metrics, unsupported downloads, or manual retry buttons. Nonterminal details poll every 1.5 seconds; dashboard/history/results refresh every 5 seconds. Terminal job and import polling stops.
+## Try real jobs
 
-## CSV demo
+Use Submit job to upload `samples/mixed.csv`, then follow the accepted job to its details. Expected actual fixture result: **5 processed, 2 accepted, 3 rejected**. `samples/valid.csv` contains three valid rows; `samples/malformed.csv` fails permanently on syntax.
 
-```powershell
-curl.exe -i -F "file=@samples/mixed.csv;type=text/csv" http://127.0.0.1:3000/api/v1/imports
-```
+The schema is UTF-8 CSV with header `name,email,age`. Names are nonempty and at most 100 characters, email uses basic format validation and lowercase normalization, and age is integer digits from 0 to 120. Invalid rows are counted/skipped. BOM, CRLF and quoted fields are supported. Limits remain one file, 2 MB, 10,000 data rows and 16 KB per record. Browser validation is feedback; server/worker validation remains authoritative.
 
-Use `curl` on macOS/Linux. The multipart field must be `file`. HTTP 202 and a `Location` header are returned after source persistence and acknowledged enqueue:
+Upload identical bytes again **under the same account**: the same retained import/job is reused without duplicate rows. A second account uploading those bytes receives a different import ID and cannot access the first account's source, job, summary or results. Filenames do not affect deduplication. Different bytes create a new import. Duplicate emails/rows inside an input remain separate row occurrences.
 
-```json
-{"jobId":"<64-character-hash>","importId":"<same-hash>","status":"accepted","statusUrl":"/api/v1/jobs/<same-hash>"}
-```
+Simulation submissions still run for ten seconds, update percentage progress and either complete or fail in a controlled way. CSV imports retain batches of 100, three total attempts, exponential retry backoff and idempotent writes. Nonterminal details poll every 1.5 seconds; terminal polling stops. Dashboard/history/results refresh every five seconds.
 
-Replace IMPORT_ID with the actual response value:
+History and statistics now use a MongoDB ownership catalog plus owner-checked live BullMQ reads. They include **only your retained jobs**. The old global 500-entry-per-state inspection window is no longer used. These reads currently cost O(your job count), with bounded Redis request concurrency, and are intended for local workloads.
 
-```powershell
-curl.exe http://127.0.0.1:3000/api/v1/jobs/IMPORT_ID
-curl.exe http://127.0.0.1:3000/api/v1/imports/IMPORT_ID
-docker compose exec mongodb mongosh jobpulse --quiet --eval 'db.records.find({}, {_id: 0}).limit(10).toArray()'
-```
+## Authenticated API use
 
-The job endpoint shows BullMQ state, attempts made, progress and result/sanitized error. CSV progress is `{processed, accepted, rejected}`; simulation progress stays 0–100. The import endpoint reads durable MongoDB counters without source bytes. Its `finished` flag means processing reached the end, not that MongoDB and BullMQ completed atomically.
+Public authentication routes:
 
-| Sample | Expected fixture outcome (not a benchmark) |
+| Route | Contract |
 | --- | --- |
-| `samples/valid.csv` | 3 processed, 3 accepted, 0 rejected |
-| `samples/mixed.csv` | 5 processed, 2 accepted, 3 rejected |
-| `samples/malformed.csv` | Permanent syntax failure: unterminated quote |
+| `POST /api/v1/auth/register` | JSON `{email,password}`; 201 with user, CSRF token, expiration and an HttpOnly cookie |
+| `POST /api/v1/auth/login` | Same JSON shape; 200 with a fresh session |
+| `GET /api/v1/auth/session` | Restore current user/CSRF/expiration, or 401 |
+| `POST /api/v1/auth/logout` | Authenticated + CSRF-protected; 204 and session revocation |
 
-Upload identical bytes twice: they share one stable import ID and retained queue job, and create no extra records. Filename does not affect identity. Even a newline change creates a new import. Repeated rows/emails within a file remain separate row occurrences.
+Passwords require at least 12 Unicode characters and at most 72 UTF-8 bytes. Overlong passwords are rejected rather than silently truncated by bcrypt. Emails are normalized and uniquely indexed. Login failures use a generic message. There are no pre-created accounts or default passwords.
 
-The exact header is `name,email,age`. Names must be nonempty, at most 100 characters and contain no control characters. Email uses basic `local@domain.suffix` validation (254 characters maximum) and is saved lowercase; this does not verify delivery. Age must contain integer digits from 0 to 120. Invalid rows are rejected and counted while valid rows continue. BOM, CRLF and quoted fields are supported; blank lines are ignored and surrounding whitespace trimmed.
+All job/import/statistics APIs require the session cookie. State-changing requests also require `X-JobPulse-Request: 1` and the session's `X-CSRF-Token`. Login/registration require the request marker and validate Origin when present. Browser requests must come from `APP_ORIGIN` (or the configured local API origin). No permissive CORS is enabled. Missing Origin is allowed for explicit non-browser clients with the required headers.
 
-Uploads allow one CSV file, no extra fields, a `.csv` extension and CSV MIME type (`text/csv`, `application/csv`, `application/vnd.ms-excel`). Limits: **2 MB/file**, four admitted uploads per API process, a 15-second request-body timeout, **16 KB/CSV record** and **10,000 data rows**. UTF-8/NUL checks reject obvious binary input; actual CSV/schema validation runs in the worker. Files are never executed or served publicly. Filenames never become filesystem paths.
-
-HTTP errors: 400 for invalid input/upload/ID, 404 for missing jobs/imports, 413 for oversized files (or simulation JSON over 2 KB), 429 for upload admission limits, and 503 for dependency failures. Malformed CSV can receive 202 and fail asynchronously; invalid individual rows are rejections rather than whole-job failures.
-
-## Original simulation demo
+Example PowerShell login after creating your account in the UI:
 
 ```powershell
-$job = Invoke-RestMethod -Method Post -Uri http://127.0.0.1:3000/api/v1/jobs -ContentType application/json -Body '{"type":"simulation","mode":"complete"}'
-Invoke-RestMethod ("http://127.0.0.1:3000" + $job.statusUrl) | ConvertTo-Json -Depth 5
+$credentials = Get-Credential -Message 'JobPulse email and password'
+$body = @{ email = $credentials.UserName; password = $credentials.GetNetworkCredential().Password } | ConvertTo-Json
+$session = Invoke-RestMethod -Method Post -Uri http://127.0.0.1:3000/api/v1/auth/login -ContentType application/json -Headers @{ 'X-JobPulse-Request' = '1' } -Body $body -SessionVariable jobpulseCookies
+$headers = @{ 'X-JobPulse-Request' = '1'; 'X-CSRF-Token' = $session.csrfToken }
+$job = Invoke-RestMethod -Method Post -Uri http://127.0.0.1:3000/api/v1/jobs -WebSession $jobpulseCookies -Headers $headers -ContentType application/json -Body '{"type":"simulation","mode":"complete"}'
+Invoke-RestMethod ("http://127.0.0.1:3000" + $job.statusUrl) -WebSession $jobpulseCookies
 ```
 
-Use `mode: "fail"` for controlled failure after ten seconds. Simulation jobs retain UUID identifiers, percentage progress and one execution attempt. Requests cannot supply executable code, handler paths or retry settings.
+For CLI CSV upload using that same in-memory session:
 
-## Tests
+```powershell
+$cookie = $jobpulseCookies.Cookies.GetCookieHeader([uri]'http://127.0.0.1:3000/api/v1/imports')
+curl.exe --cookie $cookie -H "X-JobPulse-Request: 1" -H "X-CSRF-Token: $($session.csrfToken)" -F "file=@samples/mixed.csv;type=text/csv" http://127.0.0.1:3000/api/v1/imports
+```
+
+Do not print/store cookie values or passwords in source files. Bare unauthenticated curl requests from earlier milestones now return 401. Foreign and unknown resources both return 404 after authentication. Owner/user IDs supplied by clients never grant access.
+
+## Security and legacy data
+
+Sessions have 256-bit random opaque IDs. MongoDB stores only their SHA-256 hashes, user IDs, CSRF values and fixed expiry times. Expiry is checked on every request, independently of MongoDB TTL cleanup. Cookies use HttpOnly, SameSite=Strict, a host-only scope and Path=/api. CSRF values live only in React memory; there are no auth tokens in localStorage or sessionStorage. Login/registration rotate the submitted session, and logout invalidates it in MongoDB.
+
+Passwords use bcrypt cost 12. Auth input validation rejects operator objects, oversized input and unexpected ownership fields. Rate limits are per API process: registration 20/IP/15 min, login 40/IP/15 min plus 10/IP+email/15 min, session restoration 150/IP/min, private API 300/user/min, and uploads 10/user/min. Summary polling uses the read limit, not the upload limit. No proxy IP headers are trusted.
+
+Existing unowned jobs/imports/records remain stored and inaccessible through all private APIs. They are not assigned to the first registered user. Workers can finish trusted legacy jobs, but no user can claim them. Re-upload a CSV under your own account for a new scoped import; no automatic data migration or deletion runs.
+
+Local assumptions: trust the machine, Redis, MongoDB and worker processes. Databases retain loopback-only host ports and have no new database authentication configuration. A local database/container administrator can bypass application authorization. HTTP cookie transport and same-host browser applications are not strong isolation boundaries against a compromised local process. This is not a public-production deployment.
+
+No email verification, password reset, MFA, account deletion, admin resource-sharing, breach-password lookup or production security certification is included. Registration's duplicate-email status can reveal email availability. In-memory rate limits reset with an API restart and are not shared across API replicas. Sessions themselves are durable/shared in MongoDB. A stolen valid bearer cookie remains usable until logout/expiry; HttpOnly and CSRF defenses do not make arbitrary same-origin script execution safe.
+
+## Tests and build
 
 ```powershell
 npm.cmd test
 npm.cmd run check
-npm.cmd run build:web
-docker compose config --quiet
-# Requires local Redis and MongoDB:
 npm.cmd run test:integration
-# Requires local services, installed Google Chrome and free ports 3001/5173:
 npm.cmd run test:web
+npm.cmd run build:web
 ```
 
-Default tests need no services. They cover API contracts, simulation behavior, upload limits/type checks, UTF-8/CSV validation, batching, counts, permanent errors and partial-write recovery.
+Integration tests require Redis/MongoDB and use unique test namespaces. They cover two-user isolation, owned and legacy job behavior, actual hashing/session persistence, expiry/tampering/CSRF, private metrics/history, simulations, batch writes, retries and duplicate prevention. Worker tests use real independent processes. No existing container is restarted, flushed or deleted.
 
-Integration tests use real HTTP, Redis and MongoDB with isolated queue/database names. They spawn **two independent Node worker processes**, preserve simulations, upload duplicate content concurrently, verify the actual MongoDB unique index, replay 205 rows concurrently, and verify retry/backoff/exhaustion. Test-only fault injection models lost acknowledgements after real writes. No injection flag exists in the application worker/API, and no benchmark results are fabricated.
+Browser tests require installed Google Chrome and free test ports **3001 and 5174**. They start the real app/handlers on isolated queues/databases without stopping existing development processes on 3000/5173. They create real test accounts and jobs, exercise registration/login/restore/logout and two-user CSV isolation, retain existing flows, and check accessibility/mobile behavior. Only owned test processes are stopped. Generated artifacts are ignored.
 
-Cleanup removes only that run's fixtures. Tests never flush Redis, drop databases, stop containers or delete application volumes. Empty test databases/indexes and queue metadata keys may remain.
+For local production-build preview: `npm.cmd run build:web`, then `npm.cmd --prefix web run preview` while the API and workers run separately. There is no deployment step.
 
-Browser tests start the real Express app on port **3001**, Vite on **5173**, and a worker using production handlers on a unique real queue/database namespace. This isolates them from pre-existing API/worker processes without stopping those processes. They exercise real uploads, simulation success/failure, history, results, mobile navigation, unavailable-API feedback, and automated WCAG A/AA checks on all five pages. Actual test records remain inspectable in their `jobpulse_browser_*` namespaces. Only processes started by the browser runner are stopped. Chrome is used from the machine; no cloud browser or paid service is required. The test runner requires 3001 and 5173 to be free.
+## Remaining processing limits
 
-For a local production-build preview (not public deployment), run `npm.cmd run build:web`, then `npm.cmd --prefix web run preview`. Keep Express and a worker running in separate terminals. Preview uses the same loopback-only API proxy and port 5173.
+MongoDB persistence and Redis enqueue are still separate writes, with no automatic outbox recovery. Imports are not all-or-nothing: committed batches remain after failure and can be safely replayed. Sources/jobs/ownership metadata are retained indefinitely. Re-uploading a terminal failed import does not reset attempts. There is no manual retry or file-download endpoint. Single Redis/MongoDB instances provide persistence, not high availability or zero-loss guarantees.
 
-See [CSV architecture, functions and limitations](docs/csv-imports.md) for the design and failure model. The original documents in `docs/` include future proposals, not all implemented features.
+See [authentication architecture](docs/authentication.md) for the security model, [CSV implementation](docs/csv-imports.md) for processing foundations, and [frontend architecture](docs/frontend.md) for UI components. Older milestone documents include historical behavior; authentication/ownership changes here and in the authentication document take precedence.
 
-See [frontend architecture and API contracts](docs/frontend.md) for components, data flow, read endpoints and bounded-history limitations.
+Exact check outcomes, test coverage and intermediate corrections are recorded in [authentication verification](docs/auth-verification.md).
 
-Exact frontend milestone check outcomes and corrected intermediate failures are recorded in [frontend verification](docs/frontend-verification.md).
+### If the registration page reports an unavailable account service
+
+`GET /api/v1/auth/session` should return **401** before login, not 404. A 404 `Route not found` from both port 3000 and Vite's `/api` proxy means the listening API has not loaded the auth routes. Restart that API with the current checkout; use `npm.cmd run dev` during backend development for automatic reloads. Keep `PORT` consistent with the Vite proxy. Do not remove the restoration request or treat a missing route as a successful/anonymous session. The UI keeps this failure visible with a retry action and distinguishes it from a missing job. MongoDB, cookie and session details belong in this README and the authentication document, rather than the sign-in screens.
+
+### Dashboard presentation
+
+The interface focuses on jobs, statuses, processed rows and outcomes. Hosting badges, architecture explanations and implementation footers are omitted. Queue metrics still describe the authenticated user's retained jobs, not lifetime totals or worker availability; those semantics remain documented here rather than repeated below every table. The CSV progress bar is an accepted/rejected breakdown of processed rows, not an estimated percentage of the whole file. Completed summaries use the existing result fields; no measurements are invented. Retry delay, partial saved rows, upload limits, validation and uncertain-submission recovery remain visible when useful. Technical startup, database, session, polling and recovery details remain in this README and `docs/`.

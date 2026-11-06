@@ -1,27 +1,56 @@
 export class ApiError extends Error {
-  constructor(message, status = 0) { super(message); this.status = status; }
+  constructor(message, status = 0, resource = null) { super(message); this.status = status; this.resource = resource; }
 }
+let csrfToken = null;
+export function setSessionCsrf(value) { csrfToken = value; }
 
 async function request(path, options = {}) {
+  const resource = path.startsWith('/auth/') ? 'account' : /^\/jobs\//.test(path) ? 'job' : /^\/imports\//.test(path) ? 'import' : null;
+  const sessionAtStart = csrfToken;
   const timeout = new AbortController();
   const timer = setTimeout(() => timeout.abort(), 10000);
   try {
+    const headers = new Headers(options.headers);
+    headers.set('X-JobPulse-Request', '1');
+    if (sessionAtStart) headers.set('X-CSRF-Token', sessionAtStart);
     const response = await fetch(`/api/v1${path}`, {
       ...options,
+      credentials: 'same-origin',
+      headers,
       signal: options.signal ? AbortSignal.any([options.signal, timeout.signal]) : timeout.signal,
     });
     const body = await response.json().catch(() => null);
-    if (!response.ok) throw new ApiError(body?.error?.message || `API request failed (${response.status}). Check that Express is running.`, response.status);
-    if (!body) throw new ApiError('The API returned an unreadable response.');
+    if (!response.ok) {
+      if (response.status === 401 && !path.startsWith('/auth/') && sessionAtStart === csrfToken) window.dispatchEvent(new Event('jobpulse-session-expired'));
+      const messages = {
+        DEPENDENCY_UNAVAILABLE: resource === 'account' ? 'Your account is temporarily unavailable. Please try again.'
+          : options.method === 'POST' ? 'We couldn’t confirm your submission. Check your job history before trying again.'
+            : 'Your data is temporarily unavailable. Please try again.',
+        INVALID_CSRF: 'We couldn’t verify this request. Refresh the page and try again.',
+        INVALID_ORIGIN: 'We couldn’t verify this request. Refresh the page and try again.',
+        INVALID_QUERY: 'Check your search and filters, then try again.',
+        INVALID_ID: 'This link isn’t valid. Check the address and try again.',
+      };
+      const message = resource === 'account' && response.status === 404
+        ? 'Account services are temporarily unavailable. Please try again shortly.'
+        : messages[body?.error?.code] || body?.error?.message || 'We couldn’t complete your request. Please try again.';
+      throw new ApiError(message, response.status, resource);
+    }
+    if (response.status === 204) return null;
+    if (!body) throw new ApiError('We couldn’t load this information. Please try again.');
     return body;
   } catch (error) {
     if (options.signal?.aborted) throw error;
     if (error instanceof ApiError) throw error;
-    throw new ApiError(timeout.signal.aborted ? 'The API took too long to respond. Check your local services.' : 'Cannot reach the API. Start Express and check your local services.');
+    throw new ApiError(timeout.signal.aborted ? 'This is taking longer than expected. Please try again.' : 'Unable to connect. Check your connection and try again.');
   } finally { clearTimeout(timer); }
 }
 
 export const api = {
+  session: () => request('/auth/session'),
+  login: data => request('/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }),
+  register: data => request('/auth/register', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }),
+  logout: () => request('/auth/logout', { method: 'POST' }),
   queue: signal => request('/queue', { signal }),
   jobs: (filters = {}, signal) => {
     const query = new URLSearchParams(Object.entries(filters).filter(([, value]) => value !== '' && value != null));

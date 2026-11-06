@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { NavLink, Outlet, Link, useLocation } from 'react-router-dom';
-import { Activity, ArrowUpRight, Boxes, ChevronRight, FileCheck2, History, LayoutDashboard, Menu, ShieldCheck, UploadCloud, X } from 'lucide-react';
+import { Activity, ArrowUpRight, ChevronRight, FileCheck2, History, LayoutDashboard, LogOut, Menu, UploadCloud, X } from 'lucide-react';
+import { useAuth } from './Auth.jsx';
+import { ErrorNotice } from './components.jsx';
 
 const navigation = [
   ['/', 'Dashboard', LayoutDashboard], ['/submit', 'Submit job', UploadCloud],
@@ -8,6 +10,14 @@ const navigation = [
 ];
 export default function Layout() {
   const [open, setOpen] = useState(false);
+  const auth = useAuth();
+  const [loggingOut, setLoggingOut] = useState(false);
+  const [logoutError, setLogoutError] = useState(null);
+  async function logout() {
+    setLoggingOut(true); setLogoutError(null);
+    try { await auth.logout(); } catch (error) { setLogoutError(error); }
+    finally { setLoggingOut(false); }
+  }
   const location = useLocation();
   const main = useRef(null);
   function closeNavigation() {
@@ -29,14 +39,12 @@ export default function Layout() {
     <aside className={`sidebar ${open ? 'open' : ''}`} id="navigation">
       <Link className="brand" to="/"><span className="brand-mark"><Activity size={25} /></span>JobPulse<span className="brand-dot">.</span></Link>
       <button className="mobile-close icon-button" aria-label="Close navigation" onClick={closeNavigation}><X /></button>
-      <div className="workspace-switch"><div className="workspace-icon"><Boxes size={18} /></div><div><strong>Local workspace</strong><span>Development environment</span></div><ChevronRight size={15} /></div>
       <div className="nav-label">OPERATIONS</div>
       <nav aria-label="Main navigation">{navigation.map(([path, label, Icon]) => <NavLink key={path} to={path} end={path === '/'} className={({ isActive }) => `nav-link ${isActive ? 'selected' : ''}`}><Icon size={19} />{label}{label === 'Submit job' && <span className="nav-plus">+</span>}</NavLink>)}</nav>
-      <div className="sidebar-bottom"><div className="local-note"><ShieldCheck size={20} /><strong>Your data stays local</strong><p>Queue, process, and inspect jobs on your own machine.</p></div><div className="sidebar-footer"><span className="avatar">JP</span><div><strong>JobPulse</strong><span>Local operations console</span></div></div></div>
+      <div className="sidebar-bottom"><div className="sidebar-footer"><span className="avatar">JP</span><div><strong title={auth.user.email}>{auth.user.email}</strong><span>Personal workspace</span></div></div></div>
     </aside>
-    <div className="workspace-main"><header className="topbar"><div className="breadcrumb"><button className="mobile-menu icon-button" aria-expanded={open} aria-controls="navigation" aria-label="Open navigation" onClick={() => setOpen(true)}><Menu size={21} /></button><span>Workspace</span><ChevronRight size={14} /><strong>{title}</strong></div><div className="topbar-right"><span className="environment"><span />Local only</span><span className="topbar-divider" /><Link className="topbar-link" to="/submit">New job <ArrowUpRight size={16} /></Link></div></header>
-      <main id="main-content" ref={main} tabIndex={-1}><Outlet /></main>
-      <footer className="main-footer"><span>JobPulse <span className="footer-dot">·</span> Background work, in view.</span><span>Local workspace <span className="footer-dot">/</span> No cloud required</span></footer>
+    <div className="workspace-main"><header className="topbar"><div className="breadcrumb"><button className="mobile-menu icon-button" aria-expanded={open} aria-controls="navigation" aria-label="Open navigation" onClick={() => setOpen(true)}><Menu size={21} /></button><span>Workspace</span><ChevronRight size={14} /><strong>{title}</strong></div><div className="topbar-right"><button className="icon-button" aria-label="Sign out" title="Sign out" disabled={loggingOut} onClick={logout}><LogOut size={18} /></button><span className="topbar-divider" /><Link className="topbar-link" to="/submit">New job <ArrowUpRight size={16} /></Link></div></header>
+      {logoutError && <div className="logout-notice"><ErrorNotice error={logoutError} /></div>}<main id="main-content" ref={main} tabIndex={-1}><Outlet /></main>
     </div>
   </div>;
 }

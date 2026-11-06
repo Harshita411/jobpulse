@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createApp } from '../src/app.js';
+import { testApp as createApp, authFetch as fetch, TEST_OWNER } from './helpers/auth.js';
 import { MAX_FILE_BYTES, importIdFor } from '../src/imports/csv.js';
 
 async function withApi(queue, store, run) {
@@ -25,7 +25,7 @@ test('CSV submission persists source before enqueue, uses stable ID and server-c
       const response = await fetch(`${base}/api/v1/imports`, { method: 'POST', body: form(csv) });
       assert.equal(response.status, 202);
       const result = await response.json();
-      assert.equal(result.importId, importIdFor(Buffer.from(csv)));
+      assert.equal(result.importId, importIdFor(Buffer.from(csv), TEST_OWNER));
       assert.equal(response.headers.get('location'), result.statusUrl);
     }
   });

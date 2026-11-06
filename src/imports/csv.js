@@ -19,8 +19,9 @@ export function validateFileBytes(buffer) {
 }
 
 // The schema prefix prevents a future schema change from reusing old row identities.
-export function importIdFor(buffer) {
-  return createHash('sha256').update(`jobpulse-csv-v${SCHEMA_VERSION}\0`).update(buffer).digest('hex');
+export function importIdFor(buffer, ownerId) {
+  const scope = ownerId ? `owner:${ownerId}\0` : '';
+  return createHash('sha256').update(`jobpulse-csv-v${SCHEMA_VERSION}\0${scope}`).update(buffer).digest('hex');
 }
 
 export async function* csvRows(buffer) {

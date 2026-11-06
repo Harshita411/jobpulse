@@ -1,5 +1,7 @@
 # CSV imports: implemented architecture
 
+Authentication update: new import IDs include the authenticated owner UUID, and source/records/checkpoints carry owner metadata. Public APIs require sessions and enforce ownership. The legacy unscoped hash described below is retained only for trusted processing of old unowned jobs, which are inaccessible to all accounts. See [authentication architecture](authentication.md) for the current security model.
+
 This extends the original simulation milestone. The README describes runnable commands; earlier blueprint/spec documents remain proposals beyond the implemented scope.
 
 ## Responsibilities and data flow

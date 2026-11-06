@@ -1,5 +1,6 @@
 import { UnrecoverableError } from 'bullmq';
 import { BATCH_SIZE, csvRows, importIdFor, InvalidCsvError, isImportId } from './csv.js';
+import { isJobId } from '../validation.js';
 
 export function isTransientFailure(error) {
   return ['MongoNetworkError', 'MongoNetworkTimeoutError', 'MongoServerSelectionError', 'MongoOperationTimeoutError'].includes(error.name)
@@ -11,17 +12,19 @@ export function isTransientFailure(error) {
 export async function processCsvImport(job, store) {
   try {
     const importId = job.data?.importId;
+    const ownerId = job.data?.ownerId;
+    if (ownerId !== undefined && (typeof ownerId !== 'string' || !isJobId(ownerId))) throw new InvalidCsvError('Invalid import owner');
     if (job.name !== 'csv-import' || !isImportId(importId) || job.id !== importId) {
       throw new InvalidCsvError('Invalid import job');
     }
-    const source = await store.getSource(importId);
-    if (!source || importIdFor(source) !== importId) throw new InvalidCsvError('Import source is missing or does not match its ID');
+    const source = await store.getSource(importId, ownerId);
+    if (!source || importIdFor(source, ownerId) !== importId) throw new InvalidCsvError('Import source is missing or does not match its ID');
     // Recompute counts from immutable source on retry; never increment stored counters.
     const counts = { processed: 0, accepted: 0, rejected: 0 };
     let batch = [];
     async function flush() {
-      await store.writeBatch(importId, batch);
-      await store.checkpoint(importId, counts);
+      await store.writeBatch(importId, batch, ownerId);
+      await store.checkpoint(importId, counts, false, ownerId);
       await job.updateProgress({ ...counts });
       batch = [];
     }
@@ -32,7 +35,7 @@ export async function processCsvImport(job, store) {
       if (counts.processed % BATCH_SIZE === 0) await flush();
     }
     if (counts.processed % BATCH_SIZE) await flush();
-    await store.checkpoint(importId, counts, true);
+    await store.checkpoint(importId, counts, true, ownerId);
     return { importId, ...counts };
   } catch (error) {
     if (error instanceof UnrecoverableError) throw error;

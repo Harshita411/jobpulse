@@ -11,6 +11,8 @@ import { createQueue } from '../../src/queue.js';
 import { loadConfig } from '../../src/config.js';
 import { createImportStore } from '../../src/imports/store.js';
 import { importIdFor } from '../../src/imports/csv.js';
+import { createAuthStore } from '../../src/auth/store.js';
+import { makeClient } from '../helpers/client.js';
 
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -23,6 +25,8 @@ test('real HTTP/Redis/MongoDB with two worker processes: imports, retries and du
   const mongodbUrl = mongoUrl.toString();
   const client = new MongoClient(mongodbUrl, { serverSelectionTimeoutMS: 3000 });
   const store = createImportStore(mongodbUrl);
+  const authStore = createAuthStore(mongodbUrl);
+  let ownerId;
   const children = [];
   const jobs = [];
   const events = [];
@@ -35,16 +39,20 @@ test('real HTTP/Redis/MongoDB with two worker processes: imports, retries and du
     try { await probe.connect(); await probe.ping(); } finally { probe.disconnect(); }
     resources = createQueue(config.redisUrl, testName);
     await resources.queue.waitUntilReady();
-    server = createApp(resources.queue, store).listen(0, '127.0.0.1');
+    server = createApp(resources.queue, store, { authStore }).listen(0, '127.0.0.1');
     await once(server, 'listening');
     const base = `http://127.0.0.1:${server.address().port}`;
+    const account = makeClient(base);
+    await account.register();
+    ownerId = account.user.id;
+    const fetch = account.fetch;
     const retryBytes = Buffer.from('name,email,age\nRetry,retry@example.com,20\n');
     const exhaustBytes = Buffer.from('name,email,age\nExhaust,exhaust@example.com,20\n');
     for (let i = 0; i < 2; i += 1) {
       const child = fork(new URL('../helpers/import-worker.js', import.meta.url), [], {
         env: { ...process.env, REDIS_URL: config.redisUrl, MONGODB_URL: mongodbUrl,
-          JOBPULSE_TEST_QUEUE: testName, JOBPULSE_TEST_RETRY_ID: importIdFor(retryBytes),
-          JOBPULSE_TEST_EXHAUST_ID: importIdFor(exhaustBytes) },
+          JOBPULSE_TEST_QUEUE: testName, JOBPULSE_TEST_RETRY_ID: importIdFor(retryBytes, ownerId),
+          JOBPULSE_TEST_EXHAUST_ID: importIdFor(exhaustBytes, ownerId) },
         stdio: ['ignore', 'inherit', 'inherit', 'ipc'],
       });
       children.push(child);
@@ -81,7 +89,8 @@ test('real HTTP/Redis/MongoDB with two worker processes: imports, retries and du
       const simulationIds = [];
       for (let i = 0; i < 2; i += 1) {
         const id = randomUUID();
-        await resources.queue.add('simulation', { mode: 'complete' }, { jobId: id });
+        await store.rememberJob(id, ownerId, 'simulation');
+        await resources.queue.add('simulation', { mode: 'complete', ownerId }, { jobId: id });
         jobs.push(id); simulationIds.push(id);
       }
       await Promise.all(simulationIds.map(id => finished(id, 'completed')));
@@ -122,7 +131,7 @@ test('real HTTP/Redis/MongoDB with two worker processes: imports, retries and du
       assert.ok(starts[1].at - starts[0].at >= 900, 'first retry waited for its 1-second backoff');
       assert.ok(starts[2].at - starts[1].at >= 1900, 'second retry waited for its 2-second backoff');
       assert.equal(await client.db().collection('records').countDocuments({ importId: receipt.importId }), 1);
-      const summary = await store.summary(receipt.importId);
+      const summary = await store.summary(receipt.importId, ownerId);
       assert.equal(summary.processed, 1);
     });
 
@@ -131,7 +140,7 @@ test('real HTTP/Redis/MongoDB with two worker processes: imports, retries and du
       const exhausted = await finished(receipt.importId, 'failed');
       assert.equal(exhausted.attemptsMade, 3);
       assert.equal(await client.db().collection('records').countDocuments({ importId: receipt.importId }), 1);
-      assert.equal((await store.summary(receipt.importId)).finished, false);
+      assert.equal((await store.summary(receipt.importId, ownerId)).finished, false);
       const malformed = await upload(await readFile(new URL('../../samples/malformed.csv', import.meta.url)));
       const bad = await finished(malformed.importId, 'failed');
       assert.equal(bad.attemptsMade, 1);
@@ -161,10 +170,10 @@ test('real HTTP/Redis/MongoDB with two worker processes: imports, retries and du
       const job = await finished(receipt.importId, 'completed');
       assert.equal(job.returnvalue.processed, 205);
       const { processCsvImport } = await import('../../src/imports/processor.js');
-      const replayJob = { id: receipt.importId, name: 'csv-import', data: { importId: receipt.importId }, updateProgress: async () => {} };
+      const replayJob = { id: receipt.importId, name: 'csv-import', data: { importId: receipt.importId, ownerId }, updateProgress: async () => {} };
       await Promise.all([processCsvImport(replayJob, store), processCsvImport(replayJob, store)]);
       assert.equal(await client.db().collection('records').countDocuments({ importId: receipt.importId }), 205);
-      assert.equal((await store.summary(receipt.importId)).accepted, 205);
+      assert.equal((await store.summary(receipt.importId, ownerId)).accepted, 205);
     });
   } finally {
     for (const child of children) {
@@ -186,7 +195,13 @@ test('real HTTP/Redis/MongoDB with two worker processes: imports, retries and du
     if (jobs.length) {
       await client.db().collection('records').deleteMany({ importId: { $in: jobs } });
       await client.db().collection('imports').deleteMany({ _id: { $in: jobs } });
+      await client.db().collection('jobs').deleteMany({ _id: { $in: jobs } });
     }
+    if (ownerId) {
+      await client.db().collection('sessions').deleteMany({ userId: ownerId });
+      await client.db().collection('users').deleteOne({ _id: ownerId });
+    }
+    await authStore.close();
     await store.close();
     await client.close();
   }

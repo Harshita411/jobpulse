@@ -27,9 +27,11 @@ export function importRoutes(queue, store) {
     try {
       if (!req.file) throw new InvalidCsvError('One CSV file is required in the file field');
       validateFileBytes(req.file.buffer);
-      const importId = importIdFor(req.file.buffer);
-      await store.putSource(importId, req.file.buffer);
-      await queue.add('csv-import', { importId }, { ...IMPORT_JOB_OPTIONS, jobId: importId });
+      const ownerId = req.user.id;
+      const importId = importIdFor(req.file.buffer, ownerId);
+      await store.putSource(importId, req.file.buffer, ownerId);
+      await store.rememberJob(importId, ownerId, 'csv-import');
+      await queue.add('csv-import', { importId, ownerId }, { ...IMPORT_JOB_OPTIONS, jobId: importId });
       const statusUrl = `/api/v1/jobs/${importId}`;
       res.location(statusUrl).status(202).json({ jobId: importId, importId, status: 'accepted', statusUrl });
     } catch (error) { next(error); }
@@ -37,7 +39,7 @@ export function importRoutes(queue, store) {
   router.get('/:id', async (req, res, next) => {
     if (!isImportId(req.params.id)) return res.status(400).json({ error: { code: 'INVALID_ID', message: 'Import ID must be a SHA-256 hex digest' } });
     try {
-      const summary = await store.summary(req.params.id);
+      const summary = await store.summary(req.params.id, req.user.id);
       if (!summary) return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Import not found' } });
       res.json({ ...summary, statusUrl: `/api/v1/jobs/${req.params.id}` });
     } catch (error) { next(error); }

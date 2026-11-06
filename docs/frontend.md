@@ -1,5 +1,9 @@
 # React operations console
 
+Presentation refinement: the UI now uses concise, user-focused labels and summaries. It removes hosting badges, promotional footers and infrastructure explanations while retaining status, validation, retry and partial-result guidance. CSS spacing was adjusted without changing the green palette. Requests, authentication, ownership, polling and calculations are unchanged. Read the technical contracts below for retained-job semantics and processing limits; the user interface does not repeat these as lengthy disclaimers. Completed-job result fields are displayed as readable summaries rather than raw JSON.
+
+Authentication update: all five operations pages and APIs now require a MongoDB-backed session. Login/registration, restoration, logout, CSRF and per-user ownership are described in [authentication architecture](authentication.md). The earlier global 500/state history window below has been replaced by the user's MongoDB ownership catalog with owner-checked live reads. Browser tests now use isolated ports 3001/5174; normal development remains 3000/5173. Historical single-user/no-auth statements below no longer describe the current security boundary.
+
 ## Local architecture
 
 ```mermaid
