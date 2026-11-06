@@ -1,0 +1,6 @@
+name,email,age
+Ada Lovelace,ada@example.com,36
+Missing Email,,25
+Invalid Age,age@example.com,150
+Grace Hopper,grace@example.com,85
+Too Few Fields,missing@example.com

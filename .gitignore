@@ -1,0 +1,8 @@
+node_modules/
+.env
+coverage/
+*.log
+.npm-cache/
+web/dist/
+web/playwright-report/
+web/test-results/
